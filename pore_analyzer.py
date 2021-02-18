@@ -33,7 +33,7 @@ def make_labels_h5(path_to_h5, gridname, peak_min =4.0, dist_min=0.5, apply_pbc=
     # dgrid_np[dgrid_np<0]=0
     region_labels = watershed(-dgrid_np, markers=maxi_markers, mask=masked_image.astype(np.int))
     if apply_pbc:
-        rlpbc         = apply_pbc2(region_labels, local_maxi)
+        rlpbc         = apply_pbc3(region_labels, local_maxi)
         return rlpbc, local_maxi, dgrid_np[np.where(local_maxi)]
     else:
         return region_labels, local_maxi, dgrid_np[np.where(local_maxi)]
@@ -45,7 +45,7 @@ def make_labels_grid(dgrid_np, data, dist_min=0.5, peak_min=4.0, apply_pbc=True,
     import scipy.ndimage as ndi
     from skimage.morphology import watershed
     import ase 
-    from ase.io import read
+    # from ase.io import read
 
     # hfile         = h5py.File(path_to_h5)
     # dgrid_np      = np.array(hfile[gridname])
@@ -53,7 +53,7 @@ def make_labels_grid(dgrid_np, data, dist_min=0.5, peak_min=4.0, apply_pbc=True,
     local_maxi    = extrema.h_maxima(dgrid_np, peak_min)
     
     # data = read(path_to_cif)
-    cell = ase.geometry.complete_cell(data.get_cell())
+    cell = ase.geometry.complete_cell(data.get_cell()).T
     
     # Merge local maxima that are closer than 1 A, using agglomerative clustering
     extrema_points = np.array(np.where(local_maxi)).T/local_maxi.shape # Coordinates in a 0 to 1 unit box
@@ -84,11 +84,13 @@ def make_labels_grid(dgrid_np, data, dist_min=0.5, peak_min=4.0, apply_pbc=True,
     # distance = ndi.distance_transform_edt(masked_image)
     # dgrid_np[dgrid_np<0]=0
     region_labels = watershed(-dgrid_np, markers=maxi_markers, mask=masked_image.astype(np.int))
+    extrema_points = np.array(np.where(maxi_markers)).T / maxi_markers.shape  # Coordinates in a 0 to 1 unit box
+    extrema_points = np.dot(cell, extrema_points.T).T  # True coordinates in the box
     if apply_pbc:
-        rlpbc         = apply_pbc2(region_labels, local_maxi)
-        return rlpbc, local_maxi, dgrid_np[np.where(local_maxi)]
+        rlpbc         = apply_pbc3(region_labels, local_maxi)
+        return rlpbc, maxi_markers, dgrid_np[np.where(maxi_markers)], extrema_points
     else:
-        return region_labels, local_maxi, dgrid_np[np.where(local_maxi)]
+        return region_labels,maxi_markers, dgrid_np[np.where(maxi_markers)], extrema_points
 def apply_pbc3(region_labels, localmaxi):
     import numpy as np
     import copy
@@ -184,12 +186,12 @@ def interpolate_me(histo):
     zz  = np.linspace(0, 1, histo.shape[2])
     rgi = RGI((xx,yy,zz), histo, method='linear')
     return rgi
-def find_windows_fixed(t1, rlpbc):
+def find_windows_fixed(data, rlpbc):
     from skimage.segmentation import find_boundaries
     import numpy as np
     import itertools
     from ase.io import read
-    data = read(t1.file)
+    # data = read(t1.file)
     A_unit = data.get_cell().T
     # import pyIsoP.grid3D as grid3D
 
@@ -218,13 +220,13 @@ def find_windows_fixed(t1, rlpbc):
     window_centers = np.round(window_centers, decimals=2)
     window_centers = np.unique(window_centers, axis=0)
     return window_centers, connection_list
-def find_windows_fixed_faster(t1, rlpbc):
+def find_windows_fixed_faster(data, rlpbc):
     from skimage.segmentation import find_boundaries
     import numpy as np
     import itertools
     from tqdm import tqdm
     from ase.io import read
-    data = read(t1.file)
+    # data = read(t1.file)
     A_unit = data.get_cell().T
     def check_connected(regs):
         import numpy as np
@@ -319,7 +321,7 @@ def plot_surface_h5(path_to_h5, gridname, t1, value, rlpbc, select='all', opacit
                     )
 
     return data_plot
-def plot_surface_dgrid(dgrid_np, data, value, rlpbc, select='all', opacity=1.0, cscale=None):
+def plot_surface_dgrid(dgrid_np, data, value, rlpbc, select='all', opacity=1.0, cscale=None, stepsize=2):
     # import h5py
     import numpy as np
     import ase
@@ -328,7 +330,7 @@ def plot_surface_dgrid(dgrid_np, data, value, rlpbc, select='all', opacity=1.0, 
     dgrid_np_copy = copy.deepcopy(dgrid_np)
     # data = read(path_to_cif)
 
-    A_unit = ase.geometry.complete_cell(data.get_cell())
+    A_unit = ase.geometry.complete_cell(data.get_cell()).T
 
     # hfile         = h5py.File(path_to_h5)
     # grid      = np.array(hfile[gridname])
@@ -341,7 +343,7 @@ def plot_surface_dgrid(dgrid_np, data, value, rlpbc, select='all', opacity=1.0, 
 
     # * FInd the isosurface
     from skimage.measure import marching_cubes_lewiner as mcl
-    verts, faces, normals, values = mcl(dgrid_np_copy, value, step_size=1)#, spacing=[0.2,0.2,0.2])
+    verts, faces, normals, values = mcl(dgrid_np_copy, value, step_size=stepsize)#, spacing=[0.2,0.2,0.2])
 
     if cscale==None:
         # * Make a colorscale if no colorscale is provided
@@ -360,18 +362,18 @@ def plot_surface_dgrid(dgrid_np, data, value, rlpbc, select='all', opacity=1.0, 
     hovertext=["Region: "+str(int(c)) for c in colours]
     true_verts = np.dot(A_unit, (verts/rlpbc.shape).T).T
     data_plot = go.Mesh3d(x=true_verts[:,0],y=true_verts[:,1],z=true_verts[:,2],intensity=colours.astype(np.int), hoverinfo='all', hovertext=hovertext, flatshading=False, colorscale=cscale , i=faces[:,0],j=faces[:,1],k=faces[:,2], opacity =opacity, name='Pores')
-    data_plot.update(               lighting=dict(ambient=0.18,
-                                                diffuse=1,
-                                                fresnel=0.1,
-                                                specular=1,
-                                                roughness=0.05,
-                                                facenormalsepsilon=1e-15,
-                                                vertexnormalsepsilon=1e-15),
-                                    lightposition=dict(x=10,
-                                                y=10,
-                                                z=30
-                                                    ),showscale=False
-                    )
+    # data_plot.update(               lighting=dict(ambient=0.18,
+    #                                             diffuse=1,
+    #                                             fresnel=0.1,
+    #                                             specular=1,
+    #                                             roughness=0.05,
+    #                                             facenormalsepsilon=1e-15,
+    #                                             vertexnormalsepsilon=1e-15),
+    #                                 lightposition=dict(x=10,
+    #                                             y=10,
+    #                                             z=30
+    #                                                 ),showscale=False
+    #                 )
 
     return data_plot
 def plot_windows(window_centers, color='blue'):
@@ -658,7 +660,7 @@ def single_point_energy(point, t1, f1):
     dr = np.dot(t1.A, dr.T).T
     rsq = np.sum(dr**2, axis=1)
     return np.sum((4*f1.eps_array) * ((f1.sigma_array**12/(rsq)**6) - ((f1.sigma_array)**6/(rsq)**3)))
-def single_point_distance(point, t1, f1):
+def single_point_distance(point, t1, frame_radii):
     import numpy as np
     # Compute the distance to the nearest framework surface at any grid point.
     point_unit = np.dot(t1.A_inv, point.T).T
@@ -667,8 +669,8 @@ def single_point_distance(point, t1, f1):
     dr = np.dot(t1.A, dr.T).T
     rsq = np.sum(dr**2, axis=1) # * Actual center to center distance squared.
     rsqrt = np.sqrt(rsq) # * The center to center distance
-    return np.min((rsqrt-(f1.sigma_array*2-f1.sigma)*0.5)) #* Subtract the diameter of the framework atom.
-def compute_dgrid_gpu(path_to_cif, spacing=0.2, chunk_size=5000):
+    return np.min(rsqrt-frame_radii) #* subtract the radius of the framework atom from the center to center distance
+def compute_dgrid_gpu(data, spacing=0.2, chunk_size=5000):
 
 
     from ase.io import read
@@ -679,7 +681,7 @@ def compute_dgrid_gpu(path_to_cif, spacing=0.2, chunk_size=5000):
     from tqdm import tqdm
     import ase
 
-    data    = read(path_to_cif)
+    # data    = read(path_to_cif)
     fpoints = cp.asarray(data.get_scaled_positions()-0.5)
     cell = cp.asarray(ase.geometry.complete_cell(data.get_cell()) )
     
@@ -789,11 +791,92 @@ def plot_united_alkane(coord, nbeads, bead_color, bond_color, legend_str):
     import plotly.graph_objects as go
 
     coord_adj = np.insert(coord, obj=range(nbeads, len(coord), nbeads), values= [None, None, None], axis=0)
-    trace_alkanes = go.Scatter3D(x=coord_adj[:,0],y=coord_adj[:,1],z=coord_adj[:,2],mode='markers+lines', marker=dict(size=12, color=bead_color,  opacity=0.8), line=dict(color=bond_color, width=6), name=legend_str)   
+    trace_alkanes = go.Scatter3D(x=coord_adj[:,0],y=coord_adj[:,1],z=coord_adj[:,2],mode='markers+lines', marker=dict(size=12, color=bead_color,  opacity=0.8), line=dict(color=bond_color, width=6), name=legend_str)
     
     return trace_alkanes
 
 
+def draw_network(maxima_coordinates, connections, maxima_values):
+    import numpy as np
+    import plotly.graph_objects as go
+    # Compile the edges
+    edges_master = []
+    for c in connections:
+        edges_master.append(maxima_coordinates[c[0]-1])
+        edges_master.append(maxima_coordinates[c[1]-1])
+        edges_master.append([None, None, None])
+
+    edges_master =np.vstack(edges_master)
+    hovertext= [ "Radius: {:.4f} \u212b".format(val) for val in maxima_values]
+    data_scatter = go.Scatter3d(x=maxima_coordinates[:, 0], y=maxima_coordinates[:, 1], z=maxima_coordinates[:, 2], mode='markers', hovertext=hovertext,
+                                    marker=dict(opacity=1, size=maxima_values,sizeref=0.25,
+                                                color='cyan'), name='Cavity centers')
+    data_edges = go.Scatter3d(x=edges_master[:, 0], y=edges_master[:, 1], z=edges_master[:, 2],
+                                  line=dict(width=2, color='black'), mode='lines', opacity=1,
+                                  name='Edges')
+    return data_scatter, data_edges
 
 
+def network_from_cif(path_to_cif, min_length=30, grid_spacing=0.2, probe_size=1.8, maxima_threshold=2):
 
+    import numpy as np
+    import os
+    import pore_analyzer as pa
+    import ase
+    from ase.io import read
+
+    data = read(path_to_cif)  # Read the CIF file
+    print("Computing distance grid...")
+    dgrid = pa.compute_dgrid_gpu(data, spacing=grid_spacing,
+                                 chunk_size=10000)  # Compute a fine distance grid on one unit cell
+
+    # Tile the grid to make supercell
+    import dask.array as da
+    import cupy as cp
+    dgrid = cp.asnumpy(dgrid)
+
+    # determine nx_cells ny_cells nz_cells automatically
+    la = data.get_cell_lengths_and_angles()[0]
+    lb = data.get_cell_lengths_and_angles()[1]
+    lc = data.get_cell_lengths_and_angles()[2]
+    alpha = data.get_cell_lengths_and_angles()[3] * (np.pi / 180.0)
+    beta = data.get_cell_lengths_and_angles()[4] * (np.pi / 180.0)
+    gamma = data.get_cell_lengths_and_angles()[5] * (np.pi / 180.0)
+    vol = data.get_volume()
+    eA = [la, 0, 0]
+    eB = [lb * np.cos(gamma), lb * np.sin(gamma), 0]
+    eC = [lc * np.cos(beta), lc * (np.cos(alpha) - np.cos(beta) * np.cos(gamma)) / np.sin(gamma),
+          vol / (la * lb * np.sin(gamma))]
+
+    # Find the perpendicular box lengths.
+    # Those are the projections of the lattice vectors on the x, y and z axes
+    # it can be shown that these lengths are equal to the inverse magnitude of the corresponding reciprocal vectors
+    #  Eg . a.i                            = 1/|a*|
+
+    lx_unit = vol / np.linalg.norm(np.cross(eB, eC))
+    ly_unit = vol / np.linalg.norm(np.cross(eC, eA))
+    lz_unit = vol / np.linalg.norm(np.cross(eA, eB))
+
+    nx_cells = int(np.ceil(min_length / lx_unit))  # magic formula
+    ny_cells = int(np.ceil(min_length / ly_unit))
+    nz_cells = int(np.ceil(min_length / lz_unit))
+
+    # Tile the distance grid
+    dgrid_tiled = da.tile(dgrid, (nx_cells, ny_cells, nz_cells))
+
+    # ASE atoms object for the super cell
+    data_supercell = ase.build.make_supercell(data, [[nx_cells, 0, 0], [0, ny_cells, 0],
+                                                     [0, 0, nz_cells]])  # Make a 2x2x2 super cell.
+
+    print("Computing region labels...")
+
+    # Compute the region labels, local maxima and the maxima locations
+    region_labels, localmaxi, maxivals, maxima_coordinates = pa.make_labels_grid(dgrid_tiled.compute(), data_supercell,
+                                                                                 peak_min=maxima_threshold,
+                                                                                 dist_min=probe_size, apply_pbc=False)
+
+    print("Computing connections and windows...")
+    # Compute the connections
+    connections = pa.find_windows_fixed_faster(data_supercell, region_labels)
+
+    return maxima_coordinates, connections, maxivals
